@@ -102,7 +102,7 @@ Add a `data/` or `outputs/` folder if you want to separate generated files from 
 - **Excel encoding issues:** Always call `df.to_excel(..., engine="openpyxl")` and keep column names UTF-8 friendly.
 
 ## License
-Copyright <2025> <COPYRIGHT Juhwan Son>
+Copyright 2025 COPYRIGHT Juhwan Son
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
