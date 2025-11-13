@@ -1,4 +1,3 @@
-import os
 import time
 import getpass
 from typing import List, Dict, Optional
@@ -31,89 +30,139 @@ class KreamCrawler:
         self.password = password
         self.wait = WebDriverWait(self.driver, 15)
 
+    @staticmethod
+    def _normalize_url(url: Optional[str]) -> str:
+        """
+        Strip query parameters and trailing slashes to make URL comparisons
+        more forgiving when checking navigation state.
+        """
+        if not url:
+            return ""
+        return url.split("?", 1)[0].rstrip("/")
 
-        def login_kream(self) -> None:
-            """
-            Ensure we're logged into KREAM.
+    def _navigate_if_needed(self, target_url: Optional[str]) -> None:
+        """
+        Navigate to `target_url` only when we are not already there. This avoids
+        redundant GET calls that can invalidate temporary tokens during login.
+        """
+        if not target_url:
+            return
 
-            Flow:
-            - If there's a '로그인' link on the current page, click it.
-            - Land on https://kream.co.kr/login
-            - Fill email & password (from env vars) and submit.
-            - Wait until we are no longer on /login.
-            """
-            email = self.email
-            password = self.password
+        desired = self._normalize_url(target_url)
+        current = self._normalize_url(self.driver.current_url)
+        if desired and desired == current:
+            return
 
-            if not email or not password:
-                raise RuntimeError("Email or password is empty.")
-            # 1) If we're on a page with a '로그인' top link, click it.
-
-            try:
-                login_link = self.driver.find_element(
-                    By.XPATH, "//a[contains(@class, 'top_link') and contains(normalize-space(.), '로그인')]"
-                )
-                # If found, click it to go to /login
-                self.driver.execute_script(
-                    "arguments[0].scrollIntoView({block: 'center'});", login_link
-                )
-                time.sleep(0.3)
-                login_link.click()
-            except Exception:
-                # No login link found: maybe already on login page or already logged in.
-                pass
-
-            # 2) If we're not on /login yet, go there explicitly
-            if "kream.co.kr/login" not in self.driver.current_url:
-                self.driver.get("https://kream.co.kr/login")
-
-            # 3) If we still somehow got redirected away from /login, assume logged in
-            if "kream.co.kr/login" not in self.driver.current_url:
-                return
-
-            # 4) Now fill in the login form
-            # Email input: <input type="email" class="input_txt text_fill" ...>
-            email_input = self.wait.until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, "input[type='email'].input_txt.text_fill")
-                )
-            )
-
-            # Password input: <input type="password" class="input_txt text_fill" ...>
-            password_input = self.driver.find_element(
-                By.CSS_SELECTOR, "input[type='password'].input_txt.text_fill"
-            )
-
-            email_input.clear()
-            email_input.send_keys(email)
-            password_input.clear()
-            password_input.send_keys(password)
-
-            # 5) Find 로그인 button and wait until it's enabled (no disabled attr)
-            login_button_locator = (
-                By.XPATH,
-                "//button[contains(normalize-space(.), '로그인')]",
-            )
-
+        print(f"[navigation] Navigating to {target_url}")
+        self.driver.get(target_url)
+        try:
             self.wait.until(
-                lambda d: not d.find_element(*login_button_locator).get_attribute("disabled")
+                lambda d: self._normalize_url(d.current_url) == desired
+            )
+        except TimeoutException:
+            print(
+                f"[navigation] Timed out waiting for {target_url}. "
+                f"Current url: {self.driver.current_url}"
             )
 
-            login_button = self.driver.find_element(*login_button_locator)
 
+    def login_kream(self, redirect_to: Optional[str] = None) -> None:
+        """
+        Ensure we're logged into KREAM using the email/password
+        stored on this KreamCrawler instance.
+
+        Flow:
+        - If there's a '로그인' link on the current page, click it.
+        - Otherwise go directly to /login.
+        - Fill email/password.
+        - Click 로그인 and wait until we leave /login.
+        """
+        email = self.email
+        password = self.password
+
+        if not email or not password:
+            raise RuntimeError("Email or password is empty.")
+
+        print("[login_kream] current url:", self.driver.current_url)
+
+        # 1) If there is a '로그인' link (top right), click it to go to /login
+        try:
+            login_link = self.driver.find_element(
+                By.XPATH,
+                "//a[contains(@class, 'top_link') and contains(normalize-space(.), '로그인')]",
+            )
+            print("[login_kream] Found top 로그인 link, clicking it...")
             self.driver.execute_script(
-                "arguments[0].scrollIntoView({block: 'center'});", login_button
+                "arguments[0].scrollIntoView({block: 'center'});", login_link
             )
             time.sleep(0.3)
-            login_button.click()
+            login_link.click()
+            time.sleep(1.0)
+        except Exception:
+            print("[login_kream] No top 로그인 link found (maybe already on /login).")
 
-            # 6) Wait until we leave /login (successful login or some redirect)
-            try:
-                self.wait.until(lambda d: "kream.co.kr/login" not in d.current_url)
-            except TimeoutException:
-                raise RuntimeError(
-                    "Still on login page after submitting. Check credentials or extra auth."
+        # 2) Make sure we're on the login page
+        if "kream.co.kr/login" not in self.driver.current_url:
+            print("[login_kream] Forcing navigation to /login")
+            self.driver.get("https://kream.co.kr/login")
+            time.sleep(1.0)
+
+        print("[login_kream] Now at:", self.driver.current_url)
+
+        # 3) Locate email & password inputs (using the HTML you gave)
+        email_input = self.wait.until(
+            EC.presence_of_element_located(
+                (
+                    By.XPATH,
+                    "//input[@type='email' and contains(@placeholder, 'kream@kream.co.kr')]",
                 )
+            )
+        )
+        password_input = self.driver.find_element(
+            By.XPATH, "//input[@type='password']"
+        )
+
+        print("[login_kream] Filling in email and password...")
+        email_input.clear()
+        email_input.send_keys(email)
+        password_input.clear()
+        password_input.send_keys(password)
+
+        # 4) Find the 로그인 button
+        login_button = self.driver.find_element(
+            By.XPATH, "//button[contains(normalize-space(.), '로그인')]"
+        )
+        print(
+            "[login_kream] login button disabled attribute BEFORE click:",
+            login_button.get_attribute("disabled"),
+        )
+
+        # 5) Click the 로그인 button (JS click to be extra sure)
+        self.driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center'});", login_button
+        )
+        time.sleep(0.3)
+        print("[login_kream] Clicking 로그인 button...")
+        self.driver.execute_script("arguments[0].click();", login_button)
+
+        # 6) Wait until we leave /login (successful login or some redirect)
+        logged_in = False
+        try:
+            self.wait.until(lambda d: "kream.co.kr/login" not in d.current_url)
+            logged_in = True
+            print("[login_kream] Logged in, new url:", self.driver.current_url)
+        except TimeoutException:
+            print(
+                "[login_kream] Still on /login after clicking. Maybe wrong credentials or extra auth."
+            )
+            logged_in = "kream.co.kr/login" not in self.driver.current_url
+
+        # 7) Optionally redirect straight to the desired page (usually the product)
+        target_after_login = redirect_to or self.product_url
+        if target_after_login and logged_in:
+            print(f"[login_kream] Redirecting to target page: {target_after_login}")
+            self._navigate_if_needed(target_after_login)
+            print("[login_kream] Final url after redirect:", self.driver.current_url)
 
 
 
@@ -122,29 +171,43 @@ class KreamCrawler:
     # ---------- HIGH-LEVEL FLOW ----------
 
     def open_product_and_modal(self) -> None:
-        """Open product page, log in (if needed), and open trade history modal."""
-        self.driver.get(self.product_url)
+        """
+        1) Log in (via login_kream)
+        2) Go to the product page
+        3) Click '자세히' to open the trade history modal
+        """
+        # Step 1: login
+        print("[open_product_and_modal] Step 1: login")
+        self.login_kream(redirect_to=self.product_url)
+        print("[open_product_and_modal] after login, url:", self.driver.current_url)
 
-        # If you want to login before going to product page, move login_kream() above.
-        self.login_kream(email="", password="")
+        # Step 2: ensure product page is open (safety net)
+        print("[open_product_and_modal] Step 2: ensure product page is open")
+        self._navigate_if_needed(self.product_url)
+        time.sleep(2.0)
+        print("[open_product_and_modal] now at:", self.driver.current_url)
 
-        # Wait for page to fully load something meaningful (like the title or price)
-        time.sleep(2)
-
-        # Click "자세히" (the element you showed: <p class="text-lookup ...>자세히</p>)
+        # Step 3: click "자세히" on the product page
+        print("[open_product_and_modal] Step 3: click '자세히'")
         self._click_details_button()
 
-        # Wait until the modal is visible – we look for some text that should appear
-        # in the trade history area; adjust the text if KREAM uses something else.
+        # Step 4: wait for trade history modal to appear
         try:
             self.wait.until(
                 EC.visibility_of_element_located(
-                    (By.XPATH, "//*[contains(text(), '체결 거래') or contains(text(), '거래 내역')]")
+                    (
+                        By.XPATH,
+                        "//*[contains(text(), '체결 거래') or "
+                        "contains(text(), '거래 및 입찰 내역') or "
+                        "contains(text(), '거래 내역')]",
+                    )
                 )
             )
+            print("[open_product_and_modal] Trade history modal detected.")
         except TimeoutException:
             print("⚠️ Could not confirm that the trade history modal is open.")
-            # Not fatal; we continue and try to scrape anyway.
+
+
 
     def _click_details_button(self) -> None:
         """Click the '자세히' button on the right side."""
