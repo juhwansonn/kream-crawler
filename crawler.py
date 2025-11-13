@@ -8,6 +8,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
+
 
 
 # =============================
@@ -72,10 +75,12 @@ class KreamCrawler:
         stored on this KreamCrawler instance.
 
         Flow:
-        - If there's a '로그인' link on the current page, click it.
-        - Otherwise go directly to /login.
-        - Fill email/password.
-        - Click 로그인 and wait until we leave /login.
+        - Go (or redirect) to /login.
+        - Wait for the real React form to fully load.
+        - Fill email/password (and re-fill if React wipes them).
+        - Submit via ENTER on password.
+        - Wait until we leave /login.
+        - Optionally navigate to redirect_to or product_url.
         """
         email = self.email
         password = self.password
@@ -85,7 +90,7 @@ class KreamCrawler:
 
         print("[login_kream] current url:", self.driver.current_url)
 
-        # 1) If there is a '로그인' link (top right), click it to go to /login
+        # 1) Try clicking '로그인' link if present (usually on product/main pages)
         try:
             login_link = self.driver.find_element(
                 By.XPATH,
@@ -97,17 +102,18 @@ class KreamCrawler:
             )
             time.sleep(0.3)
             login_link.click()
-            time.sleep(1.0)
         except Exception:
             print("[login_kream] No top 로그인 link found (maybe already on /login).")
 
-        # 2) Make sure we're on the login page
+        # 2) Ensure we are on the login page
         if "kream.co.kr/login" not in self.driver.current_url:
             print("[login_kream] Forcing navigation to /login")
             self.driver.get("https://kream.co.kr/login")
-            time.sleep(1.0)
 
         print("[login_kream] Now at:", self.driver.current_url)
+
+        # *** IMPORTANT: give React time to fully render the real form ***
+        time.sleep(2.5)
 
         # 3) Locate email & password inputs (using the HTML you gave)
         email_input = self.wait.until(
@@ -118,32 +124,40 @@ class KreamCrawler:
                 )
             )
         )
-        password_input = self.driver.find_element(
-            By.XPATH, "//input[@type='password']"
-        )
+        password_input = self.driver.find_element(By.XPATH, "//input[@type='password']")
 
+        # 4) Fill email and password
         print("[login_kream] Filling in email and password...")
         email_input.clear()
         email_input.send_keys(email)
         password_input.clear()
         password_input.send_keys(password)
 
-        # 4) Find the 로그인 button
-        login_button = self.driver.find_element(
-            By.XPATH, "//button[contains(normalize-space(.), '로그인')]"
-        )
-        print(
-            "[login_kream] login button disabled attribute BEFORE click:",
-            login_button.get_attribute("disabled"),
-        )
+        # 4.1) Wait a bit to see if React wipes the values, and re-fill once if needed
+        time.sleep(1.0)
+        current_email_val = email_input.get_attribute("value")
+        current_pw_val = password_input.get_attribute("value")
+        print(f"[login_kream] After typing, email value: {current_email_val!r}")
 
-        # 5) Click the 로그인 button (JS click to be extra sure)
-        self.driver.execute_script(
-            "arguments[0].scrollIntoView({block: 'center'});", login_button
-        )
-        time.sleep(0.3)
-        print("[login_kream] Clicking 로그인 button...")
-        self.driver.execute_script("arguments[0].click();", login_button)
+        if current_email_val != email or not current_pw_val:
+            print("[login_kream] Detected cleared/changed inputs, re-filling once...")
+            # Re-find inputs (in case DOM re-rendered)
+            email_input = self.driver.find_element(
+                By.XPATH,
+                "//input[@type='email' and contains(@placeholder, 'kream@kream.co.kr')]",
+            )
+            password_input = self.driver.find_element(
+                By.XPATH, "//input[@type='password']"
+            )
+            email_input.clear()
+            email_input.send_keys(email)
+            password_input.clear()
+            password_input.send_keys(password)
+            time.sleep(0.8)
+
+        # 5) Submit the form via ENTER on the password field
+        print("[login_kream] Submitting login form via ENTER on password...")
+        password_input.send_keys(Keys.RETURN)
 
         # 6) Wait until we leave /login (successful login or some redirect)
         logged_in = False
@@ -153,7 +167,7 @@ class KreamCrawler:
             print("[login_kream] Logged in, new url:", self.driver.current_url)
         except TimeoutException:
             print(
-                "[login_kream] Still on /login after clicking. Maybe wrong credentials or extra auth."
+                "[login_kream] Still on /login after submit. Maybe wrong credentials or extra auth."
             )
             logged_in = "kream.co.kr/login" not in self.driver.current_url
 
@@ -212,84 +226,97 @@ class KreamCrawler:
     def _click_details_button(self) -> None:
         """Click the '자세히' button on the right side."""
         try:
-            details_element = self.wait.until(
-                EC.element_to_be_clickable(
+            print("[_click_details_button] Looking for '자세히' text element...")
+            # First, locate the <p> element with the text '자세히'
+            details_text = self.wait.until(
+                EC.presence_of_element_located(
                     (
                         By.XPATH,
-                        # Your snippet: <p class="text-lookup ...>자세히</p>
-                        # We search for a <p> with class containing text-lookup and inner text '자세히'
-                        "//p[contains(@class, 'text-lookup') and contains(normalize-space(.), '자세히')]"
+                        "//p[contains(@class, 'text-lookup') and contains(normalize-space(.), '자세히')]",
                     )
                 )
             )
-            # Scroll it into view just in case
-            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", details_element)
+
+            # Scroll into view
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({block: 'center'});", details_text
+            )
             time.sleep(0.5)
-            details_element.click()
+
+            # Try to find a clickable ancestor: button, a, or role='button'
+            clickable = None
+            try:
+                clickable = details_text.find_element(
+                    By.XPATH,
+                    "./ancestor::*[self::button or self::a or @role='button'][1]",
+                )
+                print("[_click_details_button] Found clickable ancestor element.")
+            except Exception:
+                print(
+                    "[_click_details_button] No clickable ancestor found, "
+                    "using the <p> element itself."
+                )
+                clickable = details_text
+
+            # Try an ActionChains click first (more human-like)
+            try:
+                print("[_click_details_button] Trying ActionChains click...")
+                actions = ActionChains(self.driver)
+                actions.move_to_element(clickable).click().perform()
+            except Exception as e:
+                print(f"[_click_details_button] ActionChains click failed: {e}")
+                print("[_click_details_button] Falling back to JS click...")
+                self.driver.execute_script("arguments[0].click();", clickable)
+
+            time.sleep(1.5)
+            print("[_click_details_button] Click on '자세히' attempted.")
+
         except TimeoutException:
-            raise RuntimeError("Could not find or click the '자세히' button.")
+            raise RuntimeError("Could not find the '자세히' button.")
+
 
     # ---------- SCROLLING & SCRAPING ----------
 
     def scrape_trade_history(self) -> List[Dict[str, str]]:
         """
-        Scrape ALL trade rows (size / price / date) from the modal.
+        Scrape trade rows (size / price / date) from the market_price_table.
 
-        This version:
-        - Scrolls the window repeatedly until no more rows are added.
-        - Assumes there is a <table> in the modal; we collect <tr> rows.
-        - For each row, we take first 3 non-empty cells as size / price / date.
-
-        If KREAM uses a DIV-based layout instead of <table>, you’ll only need to
-        change the selectors inside this method.
+        Uses the structure:
+          <div class="market_price_table">
+            <div class="price_body">
+              <div class="body_list ...">
+                <div class="list_txt"><span>SIZE</span></div>
+                <div class="list_txt"><span>PRICE</span></div>
+                <div class="list_txt"><span>DATE/TIME</span></div>
         """
-        # Give modal some time to fully render
+        # Give the UI a bit of time after clicking '자세히'
         time.sleep(1.5)
 
-        # Try to locate the table that holds the trade history.
-        # You may have to tweak this XPATH based on actual HTML.
-        table = self.wait.until(
+        # 1) Find the main container for the trade list
+        container = self.wait.until(
             EC.presence_of_element_located(
-                (
-                    By.XPATH,
-                    # "any table inside the currently visible modal"
-                    "//div[contains(@class, 'layer')]//table | //div[contains(@role, 'dialog')]//table"
-                )
+                (By.CSS_SELECTOR, "div.market_price_table")
             )
         )
 
+        # 2) Each row is a body_list
+        rows = container.find_elements(By.CSS_SELECTOR, "div.price_body div.body_list")
+
         records: List[Dict[str, str]] = []
-        last_count = -1
-
-        while True:
-            # Get current rows
-            rows = table.find_elements(By.XPATH, ".//tbody/tr | .//tr")
-            current_count = len(rows)
-
-            # If row count didn't change after scrolling -> done
-            if current_count == last_count:
-                break
-
-            last_count = current_count
-
-            # Scroll down to load more rows (simple version: scroll window)
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(1.0)
-
-        # Final rows after all scrolling
-        rows = table.find_elements(By.XPATH, ".//tbody/tr | .//tr")
 
         for row in rows:
             try:
-                cells = row.find_elements(By.XPATH, ".//td | .//th | .//div")
-                texts = [c.text.strip() for c in cells if c.text.strip()]
-
-                if len(texts) < 3:
+                # Each row has three list_txt blocks with <span>text</span>
+                cells = row.find_elements(By.CSS_SELECTOR, "div.list_txt span")
+                if len(cells) < 3:
                     continue
 
-                size = texts[0]
-                price = texts[1]
-                date = texts[2]
+                size = cells[0].text.strip()
+                price = cells[1].text.strip()
+                date = cells[2].text.strip()
+
+                if not size and not price and not date:
+                    continue
 
                 records.append(
                     {
@@ -299,10 +326,12 @@ class KreamCrawler:
                     }
                 )
             except Exception:
-                # Skip weird rows like headers, etc.
+                # Skip weird/incomplete rows
                 continue
 
+        print(f"[scrape_trade_history] Collected {len(records)} rows.")
         return records
+
 
     # ---------- SAVE TO EXCEL ----------
 

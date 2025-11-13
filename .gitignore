@@ -2,3 +2,6 @@ venv/
 __pycache__/
 *.pyc
 .DS_Store
+kream_83900.xlsx
+test_login.pyc
+.prettierrc
