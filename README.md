@@ -101,22 +101,5 @@ Add a `data/` or `outputs/` folder if you want to separate generated files from 
 - **Layout/selectors changed:** Isolate selectors in one place and add integration tests (pytest + Selenium) to catch KREAM UI changes early.
 - **Excel encoding issues:** Always call `df.to_excel(..., engine="openpyxl")` and keep column names UTF-8 friendly.
 
-## Roadmap
-- [ ] Parameterized CLI (`--keyword`, `--max-pages`, `--output-dir`).
-- [ ] Headless/undetected Chromium profiles for background runs.
-- [ ] Automatic WebDriver management (e.g., `webdriver_manager`).
-- [ ] Optional post-processing (currency normalization, inventory deltas).
-- [ ] GitHub Actions workflow for scheduled scrapes or lint checks.
-
-Update the checklist as features land to keep collaborators aligned.
-
-## Contributing
-1. Fork the repository & create a feature branch.
-2. Keep pull requests focused (one enhancement or fix per PR).
-3. Describe the data you validated against (pages scraped, rows exported).
-4. Add new dependencies to `requirements.txt`.
-
-Ideas, bug reports, and discussions are welcome via GitHub Issues.
-
 ## License
 No explicit license has been added yet. Choose and add one (MIT, Apache-2.0, GPL, etc.) to clarify usage terms before sharing the project widely.
